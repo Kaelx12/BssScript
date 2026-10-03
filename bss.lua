@@ -46,53 +46,42 @@ end
 -- TWEEN HAREKET (TP değil)
 local function tweenTo(targetPos, speed)
     local hrp = getHRP()
-    if not hrp then return end
+    local hum = getHum()
+    if not hrp or not hum then return end
     speed = speed or 65
 
     local dist = (hrp.Position - targetPos).Magnitude
-    local duration = dist / speed
+    if dist < 3 then return end
 
-    -- Çok yakınsa direkt git
-    if dist < 5 then
-        hrp.CFrame = CFrame.new(targetPos)
-        return
+    -- Hızı ayarla
+    hum.WalkSpeed = speed or 65
+
+    -- MoveTo ile git, fizik sistemi Y'yi kendisi halleder
+    hum:MoveTo(targetPos)
+
+    -- Varmasını bekle (max 15 saniye)
+    local arrived = false
+    local conn
+    conn = hum.MoveToFinished:Connect(function(reached)
+        arrived = true
+        conn:Disconnect()
+    end)
+
+    local timeout = tick() + 15
+    while not arrived and tick() < timeout and farming do
+        -- Takılıp kalmışsa tekrar MoveTo bas
+        if (hrp.Position - targetPos).Magnitude < 5 then break end
+        task.wait(0.5)
+        if not arrived then
+            hum:MoveTo(targetPos)
+        end
     end
-
-    local tween = TweenService:Create(hrp, TweenInfo.new(
-        duration,
-        Enum.EasingStyle.Linear,
-        Enum.EasingDirection.Out
-    ), {CFrame = CFrame.new(targetPos)})
-
-    -- Humanoid'i durdur ki tween çakışmasın
-    local hum = getHum()
-    if hum then hum:MoveTo(hrp.Position) end
-
-    tween:Play()
-    tween.Completed:Wait()
+    if conn then pcall(function() conn:Disconnect() end) end
 end
 
--- YER TESPET (raycast ile gerçek zemin Y'si)
-local function getGroundY(pos)
-    local rayOrigin = Vector3.new(pos.X, 500, pos.Z)
-    local rayDir = Vector3.new(0, -1000, 0)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local char = getChar()
-    if char then params.FilterDescendantsInstances = {char} end
-
-    local result = workspace:Raycast(rayOrigin, rayDir, params)
-    if result then
-        return result.Position.Y + 4
-    end
-    return pos.Y
-end
-
--- GERÇEK ZEMİN Y'Sİ İLE HEDEFE GİT
+-- GETGroundY'yi kaldır, MoveTo zaten halleder
 local function moveTo(pos)
-    local groundY = getGroundY(pos)
-    local fixedPos = Vector3.new(pos.X, groundY, pos.Z)
-    tweenTo(fixedPos)
+    tweenTo(pos, 65)
 end
 
 -- BAG DOLULUK
