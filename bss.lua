@@ -1,32 +1,14 @@
+-- BSS Auto Farm v3 -- Kaelx12
+-- Object-based positioning, no hardcoded coords
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
-local UIS = game:GetService("UserInputService")
 local RS = game:GetService("ReplicatedStorage")
 local LP = Players.LocalPlayer
 
 local farming = false
 local selectedField = "Sunflower Field"
-
--- FIELD POSİSYONLARI (Y değerleri düzeltildi)
-local FIELDS = {
-    ["Sunflower Field"]   = Vector3.new(185, 26, -95),
-    ["Clover Field"]      = Vector3.new(118, 26, -120),
-    ["Blue Flower Field"] = Vector3.new(150, 26, -200),
-    ["Strawberry Field"]  = Vector3.new(230, 26, -200),
-    ["Spider Field"]      = Vector3.new(340, 26, -180),
-    ["Bamboo Field"]      = Vector3.new(370, 26, -100),
-    ["Pineapple Patch"]   = Vector3.new(420, 26, -50),
-    ["Stump Field"]       = Vector3.new(280, 26, -60),
-    ["Mushroom Field"]    = Vector3.new(100, 26, -280),
-    ["Rose Field"]        = Vector3.new(200, 26, -320),
-    ["Pine Tree Forest"]  = Vector3.new(450, 26, -200),
-    ["Coconut Field"]     = Vector3.new(500, 26, -100),
-    ["Pumpkin Patch"]     = Vector3.new(480, 26, 0),
-}
-
-local HIVE_POS = Vector3.new(152, 26, -7)
 
 -- UTILS
 local function getChar() return LP.Character end
@@ -43,80 +25,171 @@ local function setSpeed(n)
     if h then h.WalkSpeed = n end
 end
 
--- TWEEN HAREKET (TP değil)
-local function tweenTo(targetPos, speed)
+-- WORKSPACE'TEN GERÇEK FIELD POZİSYONU BUL
+local function findFieldPosition(fieldName)
+    -- Önce workspace'te Fields klasörünü ara
+    local fieldsFolder = workspace:FindFirstChild("Fields")
+        or workspace:FindFirstChild("Map")
+        or workspace:FindFirstChild("World")
+
+    if fieldsFolder then
+        -- Direkt isim eşleşmesi
+        local field = fieldsFolder:FindFirstChild(fieldName)
+        if field then
+            if field:IsA("Model") and field.PrimaryPart then
+                return field.PrimaryPart.Position
+            elseif field:IsA("Model") then
+                local part = field:FindFirstChildOfClass("BasePart")
+                if part then return part.Position end
+            elseif field:IsA("BasePart") then
+                return field.Position
+            end
+        end
+
+        -- Kısmi isim eşleşmesi
+        for _, obj in ipairs(fieldsFolder:GetDescendants()) do
+            if obj.Name:lower():find(fieldName:lower():sub(1,5)) then
+                if obj:IsA("BasePart") then
+                    return obj.Position
+                end
+            end
+        end
+    end
+
+    -- Tüm workspace'te ara
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name == fieldName then
+            if obj:IsA("Model") then
+                local p = obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+                if p then return p.Position end
+            elseif obj:IsA("BasePart") then
+                return obj.Position
+            end
+        end
+    end
+
+    return nil
+end
+
+-- HİVE POZİSYONU BUL
+local function findHivePosition()
+    -- Kendi hive'ını bul
+    local hiveNames = {"Hive", "MyHive", "BasicHive", "PlayerHive"}
+    for _, name in ipairs(hiveNames) do
+        local h = workspace:FindFirstChild(name)
+            or workspace:FindFirstDescendant and workspace:FindFirstDescendant(name)
+        if h then
+            if h:IsA("Model") then
+                local p = h.PrimaryPart or h:FindFirstChildOfClass("BasePart")
+                if p then return p.Position end
+            elseif h:IsA("BasePart") then
+                return h.Position
+            end
+        end
+    end
+
+    -- LP adıyla ara
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name:lower():find("hive") and obj:IsA("Model") then
+            local p = obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+            if p then return p.Position end
+        end
+    end
+
+    return nil
+end
+
+-- HUMANOID MOVETO (fizikle uyumlu)
+local function moveTo(targetPos)
     local hrp = getHRP()
     local hum = getHum()
     if not hrp or not hum then return end
-    speed = speed or 65
 
     local dist = (hrp.Position - targetPos).Magnitude
-    if dist < 3 then return end
+    if dist < 4 then return end
 
-    -- Hızı ayarla
-    hum.WalkSpeed = speed or 65
-
-    -- MoveTo ile git, fizik sistemi Y'yi kendisi halleder
+    setSpeed(65)
     hum:MoveTo(targetPos)
 
-    -- Varmasını bekle (max 15 saniye)
-    local arrived = false
-    local conn
-    conn = hum.MoveToFinished:Connect(function(reached)
-        arrived = true
-        conn:Disconnect()
-    end)
+    local timeout = tick() + 20
+    while farming do
+        task.wait(0.3)
+        local cur = getHRP()
+        if not cur then break end
+        local remaining = (cur.Position - targetPos).Magnitude
+        if remaining < 6 then break end
+        if tick() > timeout then break end
+        -- Takılıp kalmışsa tekrar bas
+        hum:MoveTo(targetPos)
+    end
+end
 
-    local timeout = tick() + 15
-    while not arrived and tick() < timeout and farming do
-        -- Takılıp kalmışsa tekrar MoveTo bas
-        if (hrp.Position - targetPos).Magnitude < 5 then break end
-        task.wait(0.5)
-        if not arrived then
-            hum:MoveTo(targetPos)
+-- BAG DOLU MU
+local function isBagFull()
+    -- Yöntem 1: leaderstats
+    local stats = LP:FindFirstChild("leaderstats")
+    if stats then
+        local pollen = stats:FindFirstChild("Pollen")
+        local cap = stats:FindFirstChild("Capacity") or stats:FindFirstChild("BagSize")
+        if pollen and cap then
+            local p = tonumber(pollen.Value) or 0
+            local c = tonumber(cap.Value) or 1
+            if c > 0 then return p >= c * 0.95 end
         end
     end
-    if conn then pcall(function() conn:Disconnect() end) end
-end
 
--- GETGroundY'yi kaldır, MoveTo zaten halleder
-local function moveTo(pos)
-    tweenTo(pos, 65)
-end
-
--- BAG DOLULUK
-local function isBagFull()
+    -- Yöntem 2: PlayerData
     local pd = workspace:FindFirstChild("PlayerData")
     if pd then
         local mine = pd:FindFirstChild(LP.Name)
         if mine then
             local pollen = mine:FindFirstChild("Pollen")
-            local cap = mine:FindFirstChild("BagSize")
-            if pollen and cap and tonumber(cap.Value) > 0 then
-                return tonumber(pollen.Value) >= tonumber(cap.Value) * 0.95
+            local cap = mine:FindFirstChild("BagSize") or mine:FindFirstChild("Capacity")
+            if pollen and cap then
+                local p = tonumber(pollen.Value) or 0
+                local c = tonumber(cap.Value) or 1
+                if c > 0 then return p >= c * 0.95 end
             end
         end
     end
-    local stats = LP:FindFirstChild("leaderstats") or LP:FindFirstChild("PlayerData")
-    if stats then
-        local pollen = stats:FindFirstChild("Pollen") or stats:FindFirstChild("MyPollen")
-        local cap = stats:FindFirstChild("BagSize") or stats:FindFirstChild("Capacity")
-        if pollen and cap and tonumber(cap.Value) > 0 then
-            return tonumber(pollen.Value) >= tonumber(cap.Value) * 0.95
+
+    -- Yöntem 3: GUI'den oku
+    local gui = LP.PlayerGui
+    for _, sg in ipairs(gui:GetChildren()) do
+        for _, obj in ipairs(sg:GetDescendants()) do
+            if obj:IsA("TextLabel") and obj.Text:find("/") then
+                local cur, max = obj.Text:match("(%d+)/(%d+)")
+                if cur and max then
+                    local p = tonumber(cur) or 0
+                    local c = tonumber(max) or 1
+                    if c > 100 then -- bag değerleri genelde büyük
+                        return p >= c * 0.95
+                    end
+                end
+            end
         end
     end
+
     return false
 end
 
--- SPRINKLER
+-- SPRINKLER KOY
 local function placeSprinkler()
-    local remotes = RS:FindFirstChild("Remotes") or RS:FindFirstChild("Events")
+    local remotes = RS:FindFirstChild("Remotes")
+        or RS:FindFirstChild("Events")
+        or RS:FindFirstChild("RemoteEvents")
     if remotes then
-        local r = remotes:FindFirstChild("PlaceSprinkler")
-            or remotes:FindFirstChild("Sprinkler")
-            or remotes:FindFirstChild("UseSprinkler")
-        if r then r:FireServer() return end
+        for _, r in ipairs(remotes:GetChildren()) do
+            if r:IsA("RemoteEvent") and (
+                r.Name:lower():find("sprinkler") or
+                r.Name:lower():find("plant")
+            ) then
+                r:FireServer()
+                return
+            end
+        end
     end
+    -- E tuşu
     pcall(function()
         local vi = game:GetService("VirtualInputManager")
         vi:SendKeyEvent(true, Enum.KeyCode.E, false, nil)
@@ -127,21 +200,31 @@ end
 
 -- AUTO DIG
 local function autoDig()
-    local remotes = RS:FindFirstChild("Remotes") or RS:FindFirstChild("Events")
+    local remotes = RS:FindFirstChild("Remotes")
+        or RS:FindFirstChild("Events")
+        or RS:FindFirstChild("RemoteEvents")
     if remotes then
-        local r = remotes:FindFirstChild("Dig")
-            or remotes:FindFirstChild("AutoDig")
-            or remotes:FindFirstChild("DigMutation")
-        if r then r:FireServer() end
+        for _, r in ipairs(remotes:GetChildren()) do
+            if r:IsA("RemoteEvent") and (
+                r.Name:lower():find("dig") or
+                r.Name:lower():find("mutation")
+            ) then
+                r:FireServer()
+                return
+            end
+        end
     end
 end
 
 -- TOKEN TOPLA
-local function collectTokens()
+local function collectTokens(centerPos)
     local hrp = getHRP()
     if not hrp then return end
-    local folders = {"Tokens", "DroppedTokens", "Drops", "CollectItems"}
-    for _, fname in ipairs(folders) do
+
+    local scanRadius = 35
+    local tokenFolders = {"Tokens", "DroppedTokens", "Drops", "CollectItems", "Collectibles"}
+
+    for _, fname in ipairs(tokenFolders) do
         local f = workspace:FindFirstChild(fname)
         if f then
             for _, token in ipairs(f:GetChildren()) do
@@ -153,29 +236,62 @@ local function collectTokens()
                     local p = token.PrimaryPart or token:FindFirstChildOfClass("BasePart")
                     if p then pos = p.Position end
                 end
-                if pos and (pos - hrp.Position).Magnitude <= 30 then
-                    tweenTo(pos, 80)
-                    task.wait(0.05)
+                if pos then
+                    local distToCenter = centerPos and (pos - centerPos).Magnitude or 0
+                    local distToMe = (hrp.Position - pos).Magnitude
+                    if distToMe <= scanRadius or distToCenter <= scanRadius then
+                        moveTo(pos)
+                        task.wait(0.05)
+                    end
                 end
+            end
+        end
+    end
+
+    -- Workspace direkt altındaki tokenler
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if not farming then return end
+        if obj:IsA("BasePart") and (
+            obj.Name:lower():find("token") or
+            obj.Name:lower():find("pollen") or
+            obj.Name:lower():find("coin") or
+            obj.Name:lower():find("drop")
+        ) then
+            local dist = (hrp.Position - obj.Position).Magnitude
+            if dist <= scanRadius then
+                moveTo(obj.Position)
+                task.wait(0.05)
             end
         end
     end
 end
 
--- HİVE: DÖNÜP CONVERT ET
+-- HİVEYE GİT VE CONVERT ET
 local function goHiveAndConvert()
-    local hiveGroundY = getGroundY(HIVE_POS)
-    local hiveFixed = Vector3.new(HIVE_POS.X, hiveGroundY, HIVE_POS.Z)
-    tweenTo(hiveFixed, 65)
-    task.wait(0.8)
+    local hivePos = findHivePosition()
+    if not hivePos then
+        -- Hive bulunamazsa başlangıç noktasına dön
+        hivePos = Vector3.new(0, 10, 0)
+    end
 
-    -- Remote dene
-    local remotes = RS:FindFirstChild("Remotes") or RS:FindFirstChild("Events")
+    moveTo(hivePos)
+    task.wait(1)
+
+    -- Remote ara
+    local remotes = RS:FindFirstChild("Remotes")
+        or RS:FindFirstChild("Events")
+        or RS:FindFirstChild("RemoteEvents")
     if remotes then
-        local r = remotes:FindFirstChild("Convert")
-            or remotes:FindFirstChild("ConvertHoney")
-            or remotes:FindFirstChild("DepositPollen")
-        if r then r:FireServer() end
+        for _, r in ipairs(remotes:GetChildren()) do
+            if r:IsA("RemoteEvent") and (
+                r.Name:lower():find("convert") or
+                r.Name:lower():find("deposit") or
+                r.Name:lower():find("pollen") or
+                r.Name:lower():find("honey")
+            ) then
+                r:FireServer()
+            end
+        end
     end
 
     -- E bas
@@ -186,25 +302,29 @@ local function goHiveAndConvert()
         vi:SendKeyEvent(false, Enum.KeyCode.E, false, nil)
     end)
 
-    task.wait(0.8)
+    task.wait(1)
 end
 
 -- FIELD SWEEP
-local function sweepField(center)
-    local groundY = getGroundY(center)
-    local points = {}
-    for x = -15, 15, 8 do
-        for z = -15, 15, 8 do
-            table.insert(points, Vector3.new(center.X + x, groundY, center.Z + z))
-        end
-    end
+local function sweepField(centerPos)
+    local offsets = {
+        Vector3.new(0,0,0),
+        Vector3.new(8,0,0), Vector3.new(-8,0,0),
+        Vector3.new(0,0,8), Vector3.new(0,0,-8),
+        Vector3.new(8,0,8), Vector3.new(-8,0,8),
+        Vector3.new(8,0,-8), Vector3.new(-8,0,-8),
+        Vector3.new(16,0,0), Vector3.new(-16,0,0),
+        Vector3.new(0,0,16), Vector3.new(0,0,-16),
+    }
 
-    for _, pt in ipairs(points) do
+    for _, offset in ipairs(offsets) do
         if not farming then break end
         if isBagFull() then break end
-        tweenTo(pt, 65)
-        task.wait(0.1)
-        collectTokens()
+
+        local target = centerPos + offset
+        moveTo(target)
+        task.wait(0.15)
+        collectTokens(centerPos)
         autoDig()
     end
 end
@@ -219,7 +339,7 @@ local function startAntiAFK()
     end)
 end
 
-LP.CharacterAdded:Connect(function(c)
+LP.CharacterAdded:Connect(function()
     task.wait(1)
     if farming then setSpeed(65) end
 end)
@@ -229,22 +349,31 @@ local function farmLoop()
     startAntiAFK()
     setSpeed(65)
 
+    -- Field pozisyonunu bir kez bul
+    local fieldPos = findFieldPosition(selectedField)
+
     while farming do
-        local fieldPos = FIELDS[selectedField]
-        if not fieldPos then task.wait(1) continue end
+        -- Her döngüde tekrar bul (field değişmiş olabilir)
+        fieldPos = findFieldPosition(selectedField)
+
+        if not fieldPos then
+            -- Field bulunamadı, GUI'ye yansıt
+            task.wait(2)
+            continue
+        end
 
         -- 1. Field'a git
         moveTo(fieldPos)
-        task.wait(0.3)
+        task.wait(0.4)
 
         -- 2. Sprinkler koy
         placeSprinkler()
         task.wait(0.3)
 
-        -- 3. Sweep et
+        -- 3. Sweep
         sweepField(fieldPos)
 
-        -- 4. Bag doluysa hive'a git
+        -- 4. Bag doluysa hive
         if isBagFull() then
             goHiveAndConvert()
         end
@@ -267,14 +396,14 @@ SG.ResetOnSpawn = false
 SG.Parent = LP.PlayerGui
 
 local THEME = {
-    BG     = Color3.fromRGB(12, 12, 18),
-    Panel  = Color3.fromRGB(20, 20, 28),
-    Accent = Color3.fromRGB(255, 185, 30),
-    Green  = Color3.fromRGB(50, 200, 90),
-    Red    = Color3.fromRGB(215, 65, 65),
-    Text   = Color3.fromRGB(235, 235, 235),
-    Sub    = Color3.fromRGB(130, 130, 150),
-    Border = Color3.fromRGB(38, 38, 52),
+    BG     = Color3.fromRGB(12,12,18),
+    Panel  = Color3.fromRGB(20,20,28),
+    Accent = Color3.fromRGB(255,185,30),
+    Green  = Color3.fromRGB(50,200,90),
+    Red    = Color3.fromRGB(215,65,65),
+    Text   = Color3.fromRGB(235,235,235),
+    Sub    = Color3.fromRGB(130,130,150),
+    Border = Color3.fromRGB(38,38,52),
 }
 
 local function C(p,r) local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,r or 8) c.Parent=p end
@@ -282,8 +411,8 @@ local function S(p,col,t) local s=Instance.new("UIStroke") s.Color=col or THEME.
 local function TW(o,pr,t) TweenService:Create(o,TweenInfo.new(t or 0.15,Enum.EasingStyle.Quad),pr):Play() end
 
 local Main = Instance.new("Frame")
-Main.Size = UDim2.new(0,280,0,340)
-Main.Position = UDim2.new(0,16,0.5,-170)
+Main.Size = UDim2.new(0,280,0,320)
+Main.Position = UDim2.new(0,16,0.5,-160)
 Main.BackgroundColor3 = THEME.BG
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -298,11 +427,12 @@ Hdr.BorderSizePixel = 0
 Hdr.Parent = Main
 C(Hdr,12)
 
-Instance.new("Frame", Hdr).Size = UDim2.new(1,0,0,12)
-local hfix = Hdr:FindFirstChildOfClass("Frame")
-hfix.Position = UDim2.new(0,0,1,-12)
-hfix.BackgroundColor3 = THEME.Panel
-hfix.BorderSizePixel = 0
+local HdrFix = Instance.new("Frame")
+HdrFix.Size = UDim2.new(1,0,0,12)
+HdrFix.Position = UDim2.new(0,0,1,-12)
+HdrFix.BackgroundColor3 = THEME.Panel
+HdrFix.BorderSizePixel = 0
+HdrFix.Parent = Hdr
 
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1,-46,1,0)
@@ -336,7 +466,7 @@ Content.Parent = Main
 local minimized = false
 MinB.MouseButton1Click:Connect(function()
     minimized = not minimized
-    TW(Main,{Size=minimized and UDim2.new(0,280,0,44) or UDim2.new(0,280,0,340)},0.2)
+    TW(Main,{Size=minimized and UDim2.new(0,280,0,44) or UDim2.new(0,280,0,320)},0.2)
     MinB.Text = minimized and "+" or "—"
 end)
 
@@ -362,7 +492,6 @@ UIL.Padding = UDim.new(0,6)
 UIL.SortOrder = Enum.SortOrder.LayoutOrder
 UIL.Parent = Scroll
 
--- START/STOP
 local FarmBtn = Instance.new("TextButton")
 FarmBtn.Size = UDim2.new(1,0,0,44)
 FarmBtn.BackgroundColor3 = THEME.Green
@@ -400,9 +529,12 @@ FieldLbl.LayoutOrder = 2
 FieldLbl.Parent = Scroll
 
 -- DROPDOWN
-local fieldNames = {}
-for k in pairs(FIELDS) do table.insert(fieldNames, k) end
-table.sort(fieldNames)
+local FIELD_LIST = {
+    "Bamboo Field","Blue Flower Field","Clover Field",
+    "Coconut Field","Mushroom Field","Pine Tree Forest",
+    "Pineapple Patch","Pumpkin Patch","Rose Field",
+    "Spider Field","Strawberry Field","Stump Field","Sunflower Field"
+}
 
 local DDRow = Instance.new("Frame")
 DDRow.Size = UDim2.new(1,0,0,36)
@@ -438,7 +570,7 @@ Arrow.ZIndex = 11
 Arrow.Parent = DDRow
 
 local DropList = Instance.new("Frame")
-DropList.Size = UDim2.new(1,0,0,#fieldNames*28)
+DropList.Size = UDim2.new(1,0,0,#FIELD_LIST*28)
 DropList.Position = UDim2.new(0,0,1,2)
 DropList.BackgroundColor3 = THEME.Panel
 DropList.BorderSizePixel = 0
@@ -451,7 +583,7 @@ local DL = Instance.new("UIListLayout")
 DL.SortOrder = Enum.SortOrder.LayoutOrder
 DL.Parent = DropList
 
-for i, name in ipairs(fieldNames) do
+for i, name in ipairs(FIELD_LIST) do
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1,0,0,28)
     btn.BackgroundTransparency = 1
@@ -479,6 +611,33 @@ DDBtn.Parent = DDRow
 DDBtn.MouseButton1Click:Connect(function()
     DropList.Visible = not DropList.Visible
     Arrow.Text = DropList.Visible and "▴" or "▾"
+end)
+
+-- DEBUG LABEL (field pozisyonunu göster)
+local DbgLbl = Instance.new("TextLabel")
+DbgLbl.Size = UDim2.new(1,0,0,28)
+DbgLbl.BackgroundTransparency = 1
+DbgLbl.Text = "Field pos: searching..."
+DbgLbl.TextColor3 = THEME.Sub
+DbgLbl.TextSize = 9
+DbgLbl.Font = Enum.Font.Gotham
+DbgLbl.TextXAlignment = Enum.TextXAlignment.Left
+DbgLbl.TextWrapped = true
+DbgLbl.LayoutOrder = 4
+DbgLbl.Parent = Scroll
+
+-- Debug: field pozisyonunu sürekli göster
+task.spawn(function()
+    while task.wait(2) do
+        local pos = findFieldPosition(selectedField)
+        if pos then
+            DbgLbl.Text = string.format("Field: %.0f, %.0f, %.0f", pos.X, pos.Y, pos.Z)
+            DbgLbl.TextColor3 = THEME.Green
+        else
+            DbgLbl.Text = "Field bulunamadı: " .. selectedField
+            DbgLbl.TextColor3 = THEME.Red
+        end
+    end
 end)
 
 -- STATUS BAR
